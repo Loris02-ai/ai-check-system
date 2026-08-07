@@ -83,6 +83,55 @@ def get_json(
         )
 
 
+def post_json(
+    url,
+    data=None
+):
+
+    if data is None:
+
+        data = {}
+
+
+    payload = json.dumps(
+        data,
+        ensure_ascii=False
+    ).encode(
+        "utf-8"
+    )
+
+
+    req = Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization":
+                f"Bearer {AUTH_TOKEN}",
+
+            "Content-Type":
+                "application/json",
+
+            "User-Agent":
+                "Robin-Curfew/1.0"
+        },
+        method="POST"
+    )
+
+
+    with urlopen(
+        req,
+        timeout=15
+    ) as response:
+
+        text = response.read().decode(
+            "utf-8"
+        )
+
+        return json.loads(
+            text
+        )
+
+
 # =========================
 # 获取活动
 # =========================
@@ -102,6 +151,30 @@ def get_curfew_status():
 
     return get_json(
         f"{ORIGIN_API}/curfew/status"
+    )
+
+
+# =========================
+# 保存提醒到未读提醒箱
+# =========================
+
+def save_reminder(
+    title,
+    content
+):
+
+    return post_json(
+        f"{ORIGIN_API}/reminders/push",
+        {
+            "title":
+                title,
+
+            "content":
+                content,
+
+            "source":
+                "curfew"
+        }
     )
 
 
@@ -215,8 +288,6 @@ def parse_server_time(
     )
 
 
-    # ai-check-system 保存的是 UTC
-    # 但字符串没有显式 +00:00
     if dt.tzinfo is None:
 
         dt = dt.replace(
@@ -448,6 +519,11 @@ def main():
     )
 
 
+    title = (
+        "Robin · 宵禁提醒"
+    )
+
+
     if is_active:
 
         content = (
@@ -472,7 +548,7 @@ def main():
     try:
 
         status = send_bark(
-            "Robin · 宵禁提醒",
+            title,
             content
         )
 
@@ -489,6 +565,37 @@ def main():
             "Bark failed:",
             e
         )
+
+        return
+
+
+    # =====================
+    # Bark 成功后
+    # 同步保存到提醒箱
+    # =====================
+
+    if status == 200:
+
+        try:
+
+            saved = save_reminder(
+                title,
+                content
+            )
+
+
+            print(
+                "Reminder saved:",
+                saved
+            )
+
+
+        except Exception as e:
+
+            print(
+                "Reminder save failed:",
+                e
+            )
 
 
 if __name__ == "__main__":
