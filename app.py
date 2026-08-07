@@ -19,6 +19,16 @@ AUTH_TOKEN = os.environ.get(
 )
 
 
+# 中国标准时间 UTC+8
+CHINA_OFFSET = timedelta(
+    hours=8
+)
+
+
+# =========================
+# 数据库
+# =========================
+
 def init_db():
 
     conn = sqlite3.connect(
@@ -36,6 +46,28 @@ def init_db():
         """
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS curfew_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            paused_until TEXT
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO curfew_settings (
+            id,
+            paused_until
+        )
+        VALUES (
+            1,
+            NULL
+        )
+        """
+    )
+
     conn.commit()
 
     conn.close()
@@ -43,6 +75,10 @@ def init_db():
 
 init_db()
 
+
+# =========================
+# FastAPI
+# =========================
 
 app = FastAPI(
     title="查岗系统"
@@ -57,12 +93,25 @@ app.add_middleware(
 )
 
 
+# =========================
+# 请求模型
+# =========================
+
 class ReportBody(BaseModel):
 
     app_name: str
 
     event: str
 
+
+class CurfewPauseBody(BaseModel):
+
+    minutes: int = 60
+
+
+# =========================
+# 权限
+# =========================
 
 def check_auth(req: Request):
 
@@ -78,6 +127,10 @@ def check_auth(req: Request):
             "Unauthorized"
         )
 
+
+# =========================
+# 活动记录工具
+# =========================
 
 def get_all_activity_rows():
 
@@ -272,6 +325,151 @@ def analyze_activity(rows):
     }
 
 
+# =========================
+# 宵禁状态工具
+# =========================
+
+def get_curfew_pause_until():
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT paused_until
+        FROM curfew_settings
+        WHERE id = 1
+        """
+    )
+
+    row = cur.fetchone()
+
+    conn.close()
+
+
+    if not row:
+
+        return None
+
+
+    value = row[0]
+
+
+    if not value:
+
+        return None
+
+
+    try:
+
+        return datetime.fromisoformat(
+            value
+        )
+
+    except Exception:
+
+        return None
+
+
+def set_curfew_pause_until(
+    pause_until
+):
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    conn.execute(
+        """
+        UPDATE curfew_settings
+        SET paused_until = ?
+        WHERE id = 1
+        """,
+        (
+            pause_until.isoformat()
+            if pause_until
+            else None,
+        )
+    )
+
+    conn.commit()
+
+    conn.close()
+
+
+def get_curfew_status_data():
+
+    now_utc = datetime.utcnow()
+
+    paused_until = (
+        get_curfew_pause_until()
+    )
+
+
+    is_paused = bool(
+        paused_until
+        and
+        paused_until > now_utc
+    )
+
+
+    if (
+        paused_until
+        and
+        paused_until <= now_utc
+    ):
+
+        set_curfew_pause_until(
+            None
+        )
+
+        paused_until = None
+
+
+    paused_until_local = None
+
+
+    if paused_until:
+
+        paused_until_local = (
+            paused_until
+            +
+            CHINA_OFFSET
+        )
+
+
+    return {
+
+        "is_paused":
+            is_paused,
+
+        "paused_until_utc":
+            (
+                paused_until.isoformat()
+                if paused_until
+                else None
+            ),
+
+        "paused_until_local":
+            (
+                paused_until_local.isoformat()
+                if paused_until_local
+                else None
+            ),
+
+        "server_time_utc":
+            now_utc.isoformat()
+
+    }
+
+
+# =========================
+# 手机上报
+# =========================
+
 @app.post("/report")
 async def report(
     body: ReportBody,
@@ -311,11 +509,19 @@ async def report(
     }
 
 
+# =========================
+# Ping
+# =========================
+
 @app.get("/ping")
 async def ping():
 
     return "pong"
 
+
+# =========================
+# 活动摘要
+# =========================
 
 @app.get("/activity/summary")
 async def summary():
@@ -361,6 +567,10 @@ async def summary():
 
     }
 
+
+# =========================
+# 最新活动
+# =========================
 
 @app.get("/activity/latest")
 async def latest_activity(
@@ -419,6 +629,196 @@ async def latest_activity(
 
     }
 
+
+# =========================
+# 宵禁状态
+# =========================
+
+@app.get("/curfew/status")
+async def curfew_status(
+    req: Request
+):
+
+    check_auth(req)
+
+    return get_curfew_status_data()
+
+
+# =========================
+# 暂停指定分钟
+# =========================
+
+@app.post("/curfew/pause")
+async def curfew_pause(
+    body: CurfewPauseBody,
+    req: Request
+):
+
+    check_auth(req)
+
+
+    minutes = max(
+        1,
+        min(
+            int(body.minutes),
+            720
+        )
+    )
+
+
+    now_utc = datetime.utcnow()
+
+    pause_until = (
+        now_utc
+        +
+        timedelta(
+            minutes=minutes
+        )
+    )
+
+
+    set_curfew_pause_until(
+        pause_until
+    )
+
+
+    pause_until_local = (
+        pause_until
+        +
+        CHINA_OFFSET
+    )
+
+
+    return {
+
+        "status":
+            "paused",
+
+        "minutes":
+            minutes,
+
+        "paused_until_utc":
+            pause_until.isoformat(),
+
+        "paused_until_local":
+            pause_until_local.isoformat()
+
+    }
+
+
+# =========================
+# 今晚不再提醒
+# =========================
+
+@app.post("/curfew/allow-tonight")
+async def curfew_allow_tonight(
+    req: Request
+):
+
+    check_auth(req)
+
+
+    now_utc = datetime.utcnow()
+
+    now_local = (
+        now_utc
+        +
+        CHINA_OFFSET
+    )
+
+
+    # 当天晚上 22:30 后：
+    # 暂停到第二天早上 06:00
+    if (
+        now_local.hour > 6
+        or
+        (
+            now_local.hour == 6
+            and
+            now_local.minute > 0
+        )
+    ):
+
+        tomorrow = (
+            now_local.date()
+            +
+            timedelta(days=1)
+        )
+
+        pause_until_local = datetime.combine(
+            tomorrow,
+            datetime.min.time()
+        ).replace(
+            hour=6
+        )
+
+    else:
+
+        # 凌晨 00:00 - 06:00
+        # 就暂停到当天 06:00
+        pause_until_local = datetime.combine(
+            now_local.date(),
+            datetime.min.time()
+        ).replace(
+            hour=6
+        )
+
+
+    pause_until_utc = (
+        pause_until_local
+        -
+        CHINA_OFFSET
+    )
+
+
+    set_curfew_pause_until(
+        pause_until_utc
+    )
+
+
+    return {
+
+        "status":
+            "allowed_tonight",
+
+        "paused_until_utc":
+            pause_until_utc.isoformat(),
+
+        "paused_until_local":
+            pause_until_local.isoformat()
+
+    }
+
+
+# =========================
+# 立即恢复提醒
+# =========================
+
+@app.post("/curfew/resume")
+async def curfew_resume(
+    req: Request
+):
+
+    check_auth(req)
+
+    set_curfew_pause_until(
+        None
+    )
+
+    return {
+
+        "status":
+            "resumed",
+
+        "message":
+            "Curfew reminders resumed"
+
+    }
+
+
+# =========================
+# Railway 启动
+# =========================
 
 if __name__ == "__main__":
 
