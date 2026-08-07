@@ -58,11 +58,7 @@ class ReportBody(BaseModel):
     event: str
 
 
-@app.post("/report")
-async def report(
-    body: ReportBody,
-    req: Request
-):
+def check_auth(req: Request):
 
     auth = req.headers.get(
         "Authorization",
@@ -75,7 +71,25 @@ async def report(
             "Unauthorized"
         )
 
+
+@app.post("/report")
+async def report(
+    body: ReportBody,
+    req: Request
+):
+
+    check_auth(req)
+
     now = datetime.utcnow().isoformat()
+
+    # 临时调试：Railway Logs 可以直接看到
+    # iPhone 实际传来了什么
+    print(
+        f"REPORT: app_name={body.app_name!r}, "
+        f"event={body.event!r}, "
+        f"timestamp={now}",
+        flush=True
+    )
 
     conn = sqlite3.connect(
         str(DB_PATH)
@@ -110,6 +124,45 @@ async def ping():
     return "pong"
 
 
+@app.get("/activity/debug")
+async def debug_records(
+    req: Request
+):
+
+    check_auth(req)
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT id, app_name, event, timestamp
+        FROM records
+        ORDER BY id DESC
+        LIMIT 20
+        """
+    )
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return {
+        "records": [
+            {
+                "id": row[0],
+                "app_name": row[1],
+                "event": row[2],
+                "timestamp": row[3]
+            }
+            for row in rows
+        ]
+    }
+
+
 @app.get("/activity/summary")
 async def summary():
 
@@ -119,7 +172,6 @@ async def summary():
 
     cur = conn.cursor()
 
-    # 最近真正“打开”的 App
     cur.execute(
         """
         SELECT app_name
@@ -133,7 +185,6 @@ async def summary():
 
     recent = cur.fetchall()
 
-    # 所有原始记录，用来计算使用时长
     cur.execute(
         """
         SELECT app_name, event, timestamp
@@ -151,9 +202,6 @@ async def summary():
     active_app = None
     active_start = None
 
-    # 用来处理：
-    # 从 App A 直接切换到 App B 时，
-    # open(B) 有可能比 close(A) 更早到服务器
     ignore_close_until = None
 
     for row in rows:
@@ -170,16 +218,12 @@ async def summary():
 
         if event == "open":
 
-            # 同一个 App 重复 open，忽略
             if (
                 active_app is not None
                 and app_name == active_app
             ):
                 continue
 
-            # 已经有一个 App 在使用，
-            # 现在又打开另一个 App：
-            # 直接把前一个 App 结束在这里
             if (
                 active_app is not None
                 and active_start is not None
@@ -204,8 +248,6 @@ async def summary():
                         gap
                     )
 
-                # 接下来几秒内如果又收到 close，
-                # 很可能是刚才那个旧 App 的延迟关闭事件
                 ignore_close_until = (
                     current_time
                     +
@@ -234,14 +276,10 @@ async def summary():
             ):
                 continue
 
-            # 如果刚从 A 切到 B，
-            # close(A) 可能晚于 open(B) 才到服务器。
-            # 这种紧接着出现的 close 不关闭 B。
             if (
                 ignore_close_until is not None
                 and current_time
-                <=
-                ignore_close_until
+                <= ignore_close_until
             ):
 
                 ignore_close_until = None
