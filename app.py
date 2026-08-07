@@ -68,6 +68,19 @@ def init_db():
         """
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            delivered INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
     conn.commit()
 
     conn.close()
@@ -107,6 +120,15 @@ class ReportBody(BaseModel):
 class CurfewPauseBody(BaseModel):
 
     minutes: int = 60
+
+
+class ReminderBody(BaseModel):
+
+    title: str
+
+    content: str
+
+    source: str = "curfew"
 
 
 # =========================
@@ -467,6 +489,157 @@ def get_curfew_status_data():
 
 
 # =========================
+# 提醒工具
+# =========================
+
+def save_reminder(
+    title,
+    content,
+    source="curfew"
+):
+
+    now = datetime.utcnow().isoformat()
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        INSERT INTO reminders (
+            title,
+            content,
+            source,
+            created_at,
+            delivered
+        )
+        VALUES (?, ?, ?, ?, 0)
+        """,
+        (
+            title,
+            content,
+            source,
+            now
+        )
+    )
+
+    reminder_id = cur.lastrowid
+
+    conn.commit()
+
+    conn.close()
+
+    return reminder_id
+
+
+def consume_pending_reminders():
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT
+            id,
+            title,
+            content,
+            source,
+            created_at
+        FROM reminders
+        WHERE delivered = 0
+        ORDER BY id ASC
+        LIMIT 20
+        """
+    )
+
+    rows = cur.fetchall()
+
+
+    ids = [
+        row[0]
+        for row in rows
+    ]
+
+
+    if ids:
+
+        placeholders = ",".join(
+            "?"
+            for _ in ids
+        )
+
+        cur.execute(
+            f"""
+            UPDATE reminders
+            SET delivered = 1
+            WHERE id IN ({placeholders})
+            """,
+            ids
+        )
+
+        conn.commit()
+
+
+    conn.close()
+
+
+    reminders = []
+
+
+    for row in rows:
+
+        (
+            reminder_id,
+            title,
+            content,
+            source,
+            created_at
+        ) = row
+
+
+        created_utc = datetime.fromisoformat(
+            created_at
+        )
+
+        created_local = (
+            created_utc
+            +
+            CHINA_OFFSET
+        )
+
+
+        reminders.append(
+            {
+                "id":
+                    reminder_id,
+
+                "title":
+                    title,
+
+                "content":
+                    content,
+
+                "source":
+                    source,
+
+                "created_at_utc":
+                    created_at,
+
+                "created_at_local":
+                    created_local.isoformat()
+            }
+        )
+
+
+    return reminders
+
+
+# =========================
 # 手机上报
 # =========================
 
@@ -727,8 +900,6 @@ async def curfew_allow_tonight(
     )
 
 
-    # 当天晚上 22:30 后：
-    # 暂停到第二天早上 06:00
     if (
         now_local.hour > 6
         or
@@ -754,8 +925,6 @@ async def curfew_allow_tonight(
 
     else:
 
-        # 凌晨 00:00 - 06:00
-        # 就暂停到当天 06:00
         pause_until_local = datetime.combine(
             now_local.date(),
             datetime.min.time()
@@ -791,7 +960,7 @@ async def curfew_allow_tonight(
 
 
 # =========================
-# 立即恢复提醒
+# 恢复提醒
 # =========================
 
 @app.post("/curfew/resume")
@@ -812,6 +981,67 @@ async def curfew_resume(
 
         "message":
             "Curfew reminders resumed"
+
+    }
+
+
+# =========================
+# 保存一条提醒
+# =========================
+
+@app.post("/reminders/push")
+async def reminder_push(
+    body: ReminderBody,
+    req: Request
+):
+
+    check_auth(req)
+
+
+    reminder_id = save_reminder(
+        body.title,
+        body.content,
+        body.source
+    )
+
+
+    return {
+
+        "status":
+            "saved",
+
+        "id":
+            reminder_id
+
+    }
+
+
+# =========================
+# 读取并消费未读提醒
+# =========================
+
+@app.post("/reminders/consume")
+async def reminder_consume(
+    req: Request
+):
+
+    check_auth(req)
+
+
+    reminders = (
+        consume_pending_reminders()
+    )
+
+
+    return {
+
+        "count":
+            len(
+                reminders
+            ),
+
+        "reminders":
+            reminders
 
     }
 
