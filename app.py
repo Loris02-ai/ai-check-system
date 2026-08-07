@@ -1,5 +1,6 @@
 import sqlite3
 import os
+
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -9,9 +10,8 @@ from pydantic import BaseModel
 
 
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "records.db"
 
-JST = timedelta(hours=9)
+DB_PATH = BASE_DIR / "records.db"
 
 AUTH_TOKEN = os.environ.get(
     "AUTH_TOKEN",
@@ -20,7 +20,10 @@ AUTH_TOKEN = os.environ.get(
 
 
 def init_db():
-    conn = sqlite3.connect(str(DB_PATH))
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
 
     conn.execute(
         """
@@ -34,6 +37,7 @@ def init_db():
     )
 
     conn.commit()
+
     conn.close()
 
 
@@ -54,7 +58,9 @@ app.add_middleware(
 
 
 class ReportBody(BaseModel):
+
     app_name: str
+
     event: str
 
 
@@ -66,6 +72,7 @@ def check_auth(req: Request):
     )
 
     if auth != f"Bearer {AUTH_TOKEN}":
+
         raise HTTPException(
             401,
             "Unauthorized"
@@ -81,15 +88,6 @@ async def report(
     check_auth(req)
 
     now = datetime.utcnow().isoformat()
-
-    # 临时调试：Railway Logs 可以直接看到
-    # iPhone 实际传来了什么
-    print(
-        f"REPORT: app_name={body.app_name!r}, "
-        f"event={body.event!r}, "
-        f"timestamp={now}",
-        flush=True
-    )
 
     conn = sqlite3.connect(
         str(DB_PATH)
@@ -112,6 +110,7 @@ async def report(
     )
 
     conn.commit()
+
     conn.close()
 
     return {
@@ -121,46 +120,8 @@ async def report(
 
 @app.get("/ping")
 async def ping():
+
     return "pong"
-
-
-@app.get("/activity/debug")
-async def debug_records(
-    req: Request
-):
-
-    check_auth(req)
-
-    conn = sqlite3.connect(
-        str(DB_PATH)
-    )
-
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT id, app_name, event, timestamp
-        FROM records
-        ORDER BY id DESC
-        LIMIT 20
-        """
-    )
-
-    rows = cur.fetchall()
-
-    conn.close()
-
-    return {
-        "records": [
-            {
-                "id": row[0],
-                "app_name": row[1],
-                "event": row[2],
-                "timestamp": row[3]
-            }
-            for row in rows
-        ]
-    }
 
 
 @app.get("/activity/summary")
@@ -197,12 +158,15 @@ async def summary():
 
     conn.close()
 
+
     sessions = {}
 
     active_app = None
+
     active_start = None
 
     ignore_close_until = None
+
 
     for row in rows:
 
@@ -216,13 +180,16 @@ async def summary():
             ts
         )
 
+
         if event == "open":
 
             if (
                 active_app is not None
                 and app_name == active_app
             ):
+
                 continue
+
 
             if (
                 active_app is not None
@@ -258,15 +225,19 @@ async def summary():
 
                 ignore_close_until = None
 
+
             if app_name:
 
                 active_app = app_name
+
                 active_start = current_time
 
             else:
 
                 active_app = None
+
                 active_start = None
+
 
         elif event == "close":
 
@@ -274,7 +245,9 @@ async def summary():
                 active_app is None
                 or active_start is None
             ):
+
                 continue
+
 
             if (
                 ignore_close_until is not None
@@ -283,7 +256,9 @@ async def summary():
             ):
 
                 ignore_close_until = None
+
                 continue
+
 
             gap = int(
                 (
@@ -292,6 +267,7 @@ async def summary():
                     active_start
                 ).total_seconds()
             )
+
 
             if gap >= 0:
 
@@ -304,16 +280,23 @@ async def summary():
                     gap
                 )
 
+
             active_app = None
+
             active_start = None
+
             ignore_close_until = None
 
+
     return {
+
         "recent_apps": [
             r[0]
             for r in recent
         ],
+
         "sessions": sessions
+
     }
 
 
