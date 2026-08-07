@@ -39,28 +39,25 @@ CURFEW_START = time(
     30
 )
 
-# 暂定早上 06:00 结束宵禁
+# 早上 06:00 结束宵禁
 CURFEW_END = time(
     6,
     0
 )
 
 
-# Railway 每 15 分钟检查一次
-# 所以如果刚刚结束使用，
-# 20 分钟以内仍视为宵禁期间使用过手机
+# 最近 20 分钟内使用过手机
+# 仍视为宵禁期间有活动
 RECENT_ACTIVITY_MINUTES = 20
 
 
 # =========================
-# HTTP
+# 通用 HTTP
 # =========================
 
-def get_latest_activity():
-
-    url = (
-        f"{ORIGIN_API}/activity/latest"
-    )
+def get_json(
+    url
+):
 
     req = Request(
         url,
@@ -86,6 +83,32 @@ def get_latest_activity():
         )
 
 
+# =========================
+# 获取活动
+# =========================
+
+def get_latest_activity():
+
+    return get_json(
+        f"{ORIGIN_API}/activity/latest"
+    )
+
+
+# =========================
+# 获取宵禁暂停状态
+# =========================
+
+def get_curfew_status():
+
+    return get_json(
+        f"{ORIGIN_API}/curfew/status"
+    )
+
+
+# =========================
+# Bark
+# =========================
+
 def send_bark(
     title,
     content
@@ -106,12 +129,14 @@ def send_bark(
         safe=""
     )
 
+
     url = (
         "https://api.day.app/"
         f"{safe_key}/"
         f"{safe_title}/"
         f"{safe_content}"
     )
+
 
     req = Request(
         url,
@@ -120,6 +145,7 @@ def send_bark(
                 "Robin-Curfew/1.0"
         }
     )
+
 
     with urlopen(
         req,
@@ -190,7 +216,7 @@ def parse_server_time(
 
 
     # ai-check-system 保存的是 UTC
-    # 但字符串本身没有 +00:00
+    # 但字符串没有显式 +00:00
     if dt.tzinfo is None:
 
         dt = dt.replace(
@@ -220,8 +246,10 @@ def main():
     )
 
 
-    # 不在 22:30 - 06:00
-    # 什么都不做，直接退出
+    # ---------------------
+    # 不在宵禁时间
+    # ---------------------
+
     if not is_curfew_time(
         now_local
     ):
@@ -232,6 +260,10 @@ def main():
 
         return
 
+
+    # ---------------------
+    # 检查环境变量
+    # ---------------------
 
     if not ORIGIN_API:
 
@@ -260,6 +292,48 @@ def main():
         return
 
 
+    # =====================
+    # 先检查宵禁是否暂停
+    # =====================
+
+    try:
+
+        curfew_status = (
+            get_curfew_status()
+        )
+
+    except Exception as e:
+
+        print(
+            "Curfew status check failed:",
+            e
+        )
+
+        return
+
+
+    if curfew_status.get(
+        "is_paused"
+    ):
+
+        print(
+            "Curfew reminders are paused."
+        )
+
+        print(
+            "Paused until:",
+            curfew_status.get(
+                "paused_until_local"
+            )
+        )
+
+        return
+
+
+    # =====================
+    # 再检查手机活动
+    # =====================
+
     try:
 
         activity = (
@@ -282,17 +356,20 @@ def main():
         )
     )
 
+
     active_app = (
         activity.get(
             "active_app"
         )
     )
 
+
     last_app = (
         activity.get(
             "last_app"
         )
     )
+
 
     last_activity_at = (
         parse_server_time(
@@ -334,9 +411,10 @@ def main():
         )
 
 
-    # 当前仍在用
-    # 或最近 20 分钟内用过
-    # 才发提醒
+    # ---------------------
+    # 没有宵禁期间活动
+    # ---------------------
+
     if not (
         is_active
         or
@@ -349,6 +427,10 @@ def main():
 
         return
 
+
+    # =====================
+    # 生成提醒
+    # =====================
 
     app_name = (
         active_app
@@ -382,6 +464,10 @@ def main():
             "22:30 后已经进入休息时间。"
         )
 
+
+    # =====================
+    # Bark 推送
+    # =====================
 
     try:
 
