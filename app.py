@@ -58,7 +58,6 @@ class ReportBody(BaseModel):
     event: str
 
 
-
 @app.post("/report")
 async def report(
     body: ReportBody,
@@ -76,17 +75,21 @@ async def report(
             "Unauthorized"
         )
 
-
     now = datetime.utcnow().isoformat()
-
 
     conn = sqlite3.connect(
         str(DB_PATH)
     )
 
-
     conn.execute(
-        "INSERT INTO records VALUES (?, ?, ?)",
+        """
+        INSERT INTO records (
+            app_name,
+            event,
+            timestamp
+        )
+        VALUES (?, ?, ?)
+        """,
         (
             body.app_name,
             body.event,
@@ -94,21 +97,17 @@ async def report(
         )
     )
 
-
     conn.commit()
     conn.close()
-
 
     return {
         "status": "ok"
     }
 
 
-
 @app.get("/ping")
 async def ping():
     return "pong"
-
 
 
 @app.get("/activity/summary")
@@ -120,48 +119,39 @@ async def summary():
 
     cur = conn.cursor()
 
-
     cur.execute(
         """
-        SELECT app_name,event,timestamp
+        SELECT app_name, event, timestamp
         FROM records
         ORDER BY id DESC
         LIMIT 5
         """
     )
 
-
     recent = cur.fetchall()
-
 
     cur.execute(
         """
-        SELECT app_name,event,timestamp
+        SELECT app_name, event, timestamp
         FROM records
         ORDER BY id ASC
         """
     )
 
-
     rows = cur.fetchall()
-
 
     conn.close()
 
-
     sessions = {}
     opens = {}
-
 
     for row in rows:
 
         app_name, event, ts = row
 
-
         if event == "open":
 
             opens[app_name] = datetime.fromisoformat(ts)
-
 
         elif event == "close" and app_name in opens:
 
@@ -173,16 +163,13 @@ async def summary():
                 ).total_seconds()
             )
 
-
             sessions[app_name] = (
                 sessions.get(app_name, 0)
                 +
                 gap
             )
 
-
             del opens[app_name]
-
 
     return {
         "recent_apps": [
@@ -191,7 +178,6 @@ async def summary():
         ],
         "sessions": sessions
     }
-
 
 
 if __name__ == "__main__":
