@@ -79,72 +79,13 @@ def check_auth(req: Request):
         )
 
 
-@app.post("/report")
-async def report(
-    body: ReportBody,
-    req: Request
-):
-
-    check_auth(req)
-
-    now = datetime.utcnow().isoformat()
-
-    conn = sqlite3.connect(
-        str(DB_PATH)
-    )
-
-    conn.execute(
-        """
-        INSERT INTO records (
-            app_name,
-            event,
-            timestamp
-        )
-        VALUES (?, ?, ?)
-        """,
-        (
-            body.app_name,
-            body.event,
-            now
-        )
-    )
-
-    conn.commit()
-
-    conn.close()
-
-    return {
-        "status": "ok"
-    }
-
-
-@app.get("/ping")
-async def ping():
-
-    return "pong"
-
-
-@app.get("/activity/summary")
-async def summary():
+def get_all_activity_rows():
 
     conn = sqlite3.connect(
         str(DB_PATH)
     )
 
     cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT app_name
-        FROM records
-        WHERE event = 'open'
-        AND TRIM(app_name) != ''
-        ORDER BY id DESC
-        LIMIT 5
-        """
-    )
-
-    recent = cur.fetchall()
 
     cur.execute(
         """
@@ -158,6 +99,10 @@ async def summary():
 
     conn.close()
 
+    return rows
+
+
+def analyze_activity(rows):
 
     sessions = {}
 
@@ -166,6 +111,12 @@ async def summary():
     active_start = None
 
     ignore_close_until = None
+
+    last_activity_at = None
+
+    last_event = None
+
+    last_app_name = None
 
 
     for row in rows:
@@ -179,6 +130,15 @@ async def summary():
         current_time = datetime.fromisoformat(
             ts
         )
+
+
+        last_activity_at = current_time
+
+        last_event = event
+
+        if app_name:
+
+            last_app_name = app_name
 
 
         if event == "open":
@@ -214,6 +174,7 @@ async def summary():
                         +
                         gap
                     )
+
 
                 ignore_close_until = (
                     current_time
@@ -290,12 +251,171 @@ async def summary():
 
     return {
 
+        "sessions":
+            sessions,
+
+        "active_app":
+            active_app,
+
+        "active_start":
+            active_start,
+
+        "last_activity_at":
+            last_activity_at,
+
+        "last_event":
+            last_event,
+
+        "last_app_name":
+            last_app_name
+
+    }
+
+
+@app.post("/report")
+async def report(
+    body: ReportBody,
+    req: Request
+):
+
+    check_auth(req)
+
+    now = datetime.utcnow().isoformat()
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    conn.execute(
+        """
+        INSERT INTO records (
+            app_name,
+            event,
+            timestamp
+        )
+        VALUES (?, ?, ?)
+        """,
+        (
+            body.app_name,
+            body.event,
+            now
+        )
+    )
+
+    conn.commit()
+
+    conn.close()
+
+    return {
+        "status": "ok"
+    }
+
+
+@app.get("/ping")
+async def ping():
+
+    return "pong"
+
+
+@app.get("/activity/summary")
+async def summary():
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT app_name
+        FROM records
+        WHERE event = 'open'
+        AND TRIM(app_name) != ''
+        ORDER BY id DESC
+        LIMIT 5
+        """
+    )
+
+    recent = cur.fetchall()
+
+    conn.close()
+
+
+    rows = get_all_activity_rows()
+
+    activity = analyze_activity(
+        rows
+    )
+
+
+    return {
+
         "recent_apps": [
             r[0]
             for r in recent
         ],
 
-        "sessions": sessions
+        "sessions":
+            activity["sessions"]
+
+    }
+
+
+@app.get("/activity/latest")
+async def latest_activity(
+    req: Request
+):
+
+    check_auth(req)
+
+
+    rows = get_all_activity_rows()
+
+    activity = analyze_activity(
+        rows
+    )
+
+
+    last_activity_at = activity[
+        "last_activity_at"
+    ]
+
+    active_start = activity[
+        "active_start"
+    ]
+
+
+    return {
+
+        "server_time_utc":
+            datetime.utcnow().isoformat(),
+
+        "last_activity_at":
+            (
+                last_activity_at.isoformat()
+                if last_activity_at
+                else None
+            ),
+
+        "last_event":
+            activity["last_event"],
+
+        "last_app":
+            activity["last_app_name"],
+
+        "is_active":
+            activity["active_app"] is not None,
+
+        "active_app":
+            activity["active_app"],
+
+        "active_since":
+            (
+                active_start.isoformat()
+                if active_start
+                else None
+            )
 
     }
 
