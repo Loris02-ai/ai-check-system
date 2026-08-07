@@ -119,10 +119,13 @@ async def summary():
 
     cur = conn.cursor()
 
+    # 最近真正“打开”的 App
     cur.execute(
         """
-        SELECT app_name, event, timestamp
+        SELECT app_name
         FROM records
+        WHERE event = 'open'
+        AND TRIM(app_name) != ''
         ORDER BY id DESC
         LIMIT 5
         """
@@ -130,6 +133,7 @@ async def summary():
 
     recent = cur.fetchall()
 
+    # 所有原始记录，用来计算使用时长
     cur.execute(
         """
         SELECT app_name, event, timestamp
@@ -143,33 +147,128 @@ async def summary():
     conn.close()
 
     sessions = {}
-    opens = {}
+
+    active_app = None
+    active_start = None
+
+    # 用来处理：
+    # 从 App A 直接切换到 App B 时，
+    # open(B) 有可能比 close(A) 更早到服务器
+    ignore_close_until = None
 
     for row in rows:
 
         app_name, event, ts = row
 
+        app_name = (
+            app_name or ""
+        ).strip()
+
+        current_time = datetime.fromisoformat(
+            ts
+        )
+
         if event == "open":
 
-            opens[app_name] = datetime.fromisoformat(ts)
+            # 同一个 App 重复 open，忽略
+            if (
+                active_app is not None
+                and app_name == active_app
+            ):
+                continue
 
-        elif event == "close" and app_name in opens:
+            # 已经有一个 App 在使用，
+            # 现在又打开另一个 App：
+            # 直接把前一个 App 结束在这里
+            if (
+                active_app is not None
+                and active_start is not None
+            ):
+
+                gap = int(
+                    (
+                        current_time
+                        -
+                        active_start
+                    ).total_seconds()
+                )
+
+                if gap >= 0:
+
+                    sessions[active_app] = (
+                        sessions.get(
+                            active_app,
+                            0
+                        )
+                        +
+                        gap
+                    )
+
+                # 接下来几秒内如果又收到 close，
+                # 很可能是刚才那个旧 App 的延迟关闭事件
+                ignore_close_until = (
+                    current_time
+                    +
+                    timedelta(seconds=5)
+                )
+
+            else:
+
+                ignore_close_until = None
+
+            if app_name:
+
+                active_app = app_name
+                active_start = current_time
+
+            else:
+
+                active_app = None
+                active_start = None
+
+        elif event == "close":
+
+            if (
+                active_app is None
+                or active_start is None
+            ):
+                continue
+
+            # 如果刚从 A 切到 B，
+            # close(A) 可能晚于 open(B) 才到服务器。
+            # 这种紧接着出现的 close 不关闭 B。
+            if (
+                ignore_close_until is not None
+                and current_time
+                <=
+                ignore_close_until
+            ):
+
+                ignore_close_until = None
+                continue
 
             gap = int(
                 (
-                    datetime.fromisoformat(ts)
+                    current_time
                     -
-                    opens[app_name]
+                    active_start
                 ).total_seconds()
             )
 
-            sessions[app_name] = (
-                sessions.get(app_name, 0)
-                +
-                gap
-            )
+            if gap >= 0:
 
-            del opens[app_name]
+                sessions[active_app] = (
+                    sessions.get(
+                        active_app,
+                        0
+                    )
+                    +
+                    gap
+                )
+
+            active_app = None
+            active_start = None
+            ignore_close_until = None
 
     return {
         "recent_apps": [
