@@ -177,6 +177,106 @@ def get_all_activity_rows():
     return rows
 
 
+def get_activity_rows_before(
+    end_utc
+):
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT app_name, event, timestamp
+        FROM records
+        WHERE timestamp < ?
+        ORDER BY id ASC
+        """,
+        (
+            end_utc.isoformat(),
+        )
+    )
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return rows
+
+
+def get_activity_rows_between(
+    start_utc,
+    end_utc
+):
+
+    conn = sqlite3.connect(
+        str(DB_PATH)
+    )
+
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT app_name, event, timestamp
+        FROM records
+        WHERE timestamp >= ?
+        AND timestamp < ?
+        ORDER BY id ASC
+        """,
+        (
+            start_utc.isoformat(),
+            end_utc.isoformat(),
+        )
+    )
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return rows
+
+
+def get_china_today_utc_range():
+
+    now_utc = datetime.utcnow()
+
+    now_local = (
+        now_utc
+        +
+        CHINA_OFFSET
+    )
+
+    start_local = datetime.combine(
+        now_local.date(),
+        datetime.min.time()
+    )
+
+    end_local = (
+        start_local
+        +
+        timedelta(days=1)
+    )
+
+    start_utc = (
+        start_local
+        -
+        CHINA_OFFSET
+    )
+
+    end_utc = (
+        end_local
+        -
+        CHINA_OFFSET
+    )
+
+    return (
+        start_utc,
+        end_utc
+    )
+
+
 def analyze_activity(rows):
 
     sessions = {}
@@ -699,6 +799,12 @@ async def ping():
 @app.get("/activity/summary")
 async def summary():
 
+    (
+        start_utc,
+        end_utc
+    ) = get_china_today_utc_range()
+
+
     conn = sqlite3.connect(
         str(DB_PATH)
     )
@@ -711,9 +817,15 @@ async def summary():
         FROM records
         WHERE event = 'open'
         AND TRIM(app_name) != ''
+        AND timestamp >= ?
+        AND timestamp < ?
         ORDER BY id DESC
         LIMIT 5
-        """
+        """,
+        (
+            start_utc.isoformat(),
+            end_utc.isoformat(),
+        )
     )
 
     recent = cur.fetchall()
@@ -721,7 +833,38 @@ async def summary():
     conn.close()
 
 
-    rows = get_all_activity_rows()
+    rows = get_activity_rows_between(
+        start_utc,
+        end_utc
+    )
+
+
+    previous_rows = get_activity_rows_before(
+        start_utc
+    )
+
+    previous_activity = analyze_activity(
+        previous_rows
+    )
+
+
+    if (
+        previous_activity["active_app"]
+        is not None
+        and
+        previous_activity["active_start"]
+        is not None
+    ):
+
+        rows.insert(
+            0,
+            (
+                previous_activity["active_app"],
+                "open",
+                start_utc.isoformat()
+            )
+        )
+
 
     activity = analyze_activity(
         rows
