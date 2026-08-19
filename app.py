@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
 
-DB_PATH = BASE_DIR / "records.db"
+DB_PATH = Path("/app/data/records.db")
 
 AUTH_TOKEN = os.environ.get(
     "AUTH_TOKEN",
