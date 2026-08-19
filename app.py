@@ -11,7 +11,16 @@ from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
 
-DB_PATH = Path("/app/data/records.db")
+VOLUME_MOUNT_PATH = os.environ.get(
+    "RAILWAY_VOLUME_MOUNT_PATH",
+    ""
+).strip()
+
+DB_PATH = (
+    Path(VOLUME_MOUNT_PATH) / "records.db"
+    if VOLUME_MOUNT_PATH
+    else BASE_DIR / "records.db"
+)
 
 AUTH_TOKEN = os.environ.get(
     "AUTH_TOKEN",
